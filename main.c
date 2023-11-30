@@ -172,7 +172,7 @@ void printTree(Node* root){
 
 int main() {
     Node* root = NULL;
-    //insert
+    //inser
     int value[] = {3, 11, 7, 1, 18, 15, 9, 5, 21, 19, 13, 17, 8, 20, 14, 4, 10, 16, 2, 12, 6};
     int num = sizeof(value) / sizeof(value[0]);
 
