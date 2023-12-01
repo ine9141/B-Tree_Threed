@@ -224,8 +224,9 @@ void treeDelete(Node* parent, int value){
 
 Node* verification(Node* root, Node* node){
     int min = M/2+M%2-1;
+    
     if (node == root) return root;
-    if (node->count < min) return recover(root, node);
+    else if (node->count < min) return recover(root, node);
     else return root;
 }
 
