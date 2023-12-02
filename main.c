@@ -21,17 +21,6 @@ Node* root = NULL;
 Node* split();
 void recover();
 
-void nodeCopy(Node* tmp, Node* node){
-    tmp->leaf = node->leaf;
-    tmp->count = node->count;
-    for(int i = 0 ; i < node->count ; i++) tmp->value[i] = node->value[i];
-    for(int i = 0 ; i <= node->count ; i++) tmp->child[i] = node->child[i];
-    tmp->successor = node->successor;
-    tmp->predecessor = node->predecessor;
-    tmp->parent = node->parent;
-}
-
-
 Node* newNode(){
     Node* tmp = (Node *)malloc(sizeof(Node));
     tmp->leaf = 1;
@@ -242,10 +231,23 @@ void treeDelete(Node* parent, int value){
     parent->count--;
 }
 
+void _treeDelete(Node* parent, int value){
+    for(int i = 0 ; i < parent->count ; i++){
+        if(parent->value[i] == value){
+            for(int j = i ; j < parent->count+1; j++){
+                parent->value[j] = parent->value[j+1];
+                parent->child[j] = parent->child[j+1];
+            } break;
+        } 
+    }
+    parent->count--;
+}
+
+
 void verification(Node* node){
     int min = M/2+M%2-1;
 
-    if (node->count < min) recover(node);
+    if (node->parent != NULL&&node->count < min) recover(node);
 
 }
 
@@ -261,34 +263,53 @@ Node* rightChild(Node* node,int value){
     }
 }
 
-void mergeRoot(){
-    Node* leftChild = root->child[0];
-    Node* rightChild = root->child[1];
-    root->leaf = leftChild->leaf;
+void mergeRoot(Node* parent){
+    Node* leftChild = parent->child[0];
+    Node* rightChild = parent->child[1];
+    parent->leaf = leftChild->leaf;
 
     int p_value = 0;
     int c_value = 0;
-    root->count = 0;
+    parent->count = 0;
     for(int i = 0 ; leftChild->value[i] ; i++){
-        root->value[p_value] = leftChild->value[i];
+        parent->value[p_value] = leftChild->value[i];
         p_value++;
-        root->count++;
+        parent->count++;
     }
 
     for(int i = 0 ; rightChild->value[i] ; i++){
-        root->value[p_value] = rightChild->value[i];
+        parent->value[p_value] = rightChild->value[i];
         p_value++;
-        root->count++;
+        parent->count++;
     }
 
     for(int i = 0 ; leftChild->child[i] != NULL ; i++){
-        root->child[c_value] = leftChild->child[i];
+        parent->child[c_value] = leftChild->child[i];
+        leftChild->child[i]->parent = parent;
         c_value++;
     }
 
     for(int i = 0 ; rightChild->child[i] != NULL ; i++){
-        root->child[c_value] = rightChild->child[i];
+        parent->child[c_value] = rightChild->child[i];
+        rightChild->child[i]->parent = parent;
         c_value++;
+    }
+
+    free(leftChild);
+    free(rightChild);
+}
+
+void mergeTreeL(Node* left, Node* right, int parent){
+    int l_count = left->count;
+    leafInsert(left,parent);
+    int r_count = right->count;
+    for (int i = l_count+1; i < l_count+1+r_count ; i++ ){
+        left->value[i] = right->value[i-l_count-1];
+        left->count++;
+    }
+    for (int i = l_count+1; i < l_count+r_count+2;i++ ){
+        left->child[i] = right->child[i-(l_count+1)];
+        left->child[i]->parent=left;
     }
 }
 
@@ -298,50 +319,81 @@ void recover(Node* leaf){
     Node* successor = leaf->successor;
     Node* predecessor = leaf->predecessor;
     Node* parent = leaf->parent;
+    Node* child; 
+
+    int leftParent = searchParentByRight(parent,leaf->value[0]);
+    int rightParent = searchParentByLeft(parent,leaf->value[0]);
+    if(leftParent) child = leftChild(parent,leftParent);
+    else child = rightChild(parent,rightParent);
     
     //전임자에게 빌림
-    if (predecessor!=NULL&&predecessor->count > min){
-
-        leafInsert(leaf,predecessor->value[predecessor->count-1]);
-        IndexChange(leaf,leaf->value[1],leaf->value[0]);
-        leafDelete(predecessor, predecessor->value[predecessor->count-1]);
+    if (leftParent&&child->count > min){
+        if(leaf->leaf){
+            leafInsert(leaf,child->value[child->count-1]);
+            IndexChange(leaf,leaf->value[1],leaf->value[0]);
+            leafDelete(child, child->value[child->count-1]);
+        } else{
+            leafInsert(leaf,leftParent);
+            IndexChange(child,leftParent,child->value[child->count-1]);
+            leaf->child[2] = leaf->child[1];
+            leaf->child[1] = leaf->child[0];
+            leaf->child[0] = child->child[child->count];
+            child->child[child->count]->parent = leaf;
+            treeDelete(child,child->value[child->count-1]);
+        }
     
     //후임자에게 빌림
-    } else if (successor!=NULL&&successor->count > min){
-
-        leafInsert(leaf,successor->value[0]);
-        IndexChange(successor,successor->value[0],successor->value[1]);
-        leafDelete(successor, successor->value[0]);
+    } else if (rightParent&&child->count > min){
+        if(leaf->leaf){
+            leafInsert(leaf,child->value[0]);
+            IndexChange(child,child->value[0],child->value[1]);
+            leafDelete(child, child->value[0]);
+        } else{
+            leafInsert(leaf,rightParent);
+            IndexChange(child,rightParent,child->value[0]);
+            leaf->child[leaf->count]=child->child[0];
+            child->child[0]->parent=leaf;
+            _treeDelete(child,child->value[0]);
+        }
 
     //부모에게 빌림
     } else{
         //부모가 루트 라면
-        if (parent == root){
-            leafInsert(leaf, root->value[0]);
-            mergeRoot();
+        if (parent->count==1){
+            if(!leaf->leaf) leafInsert(leaf, parent->value[0]);
+            mergeRoot(parent);
+
         } else{
-
-            int leftParent = searchParentByRight(parent,leaf->value[0]);
-            int rightParent = searchParentByLeft(parent,leaf->value[0]);
-
-            if(leftParent){
-                Node* child = leftChild(parent,leftParent);
-                leafInsert(child,leaf->value[0]);
-                treeDelete(parent,leftParent); 
-
-            } else if(rightParent){
-                Node* child = rightChild(parent,rightParent);
-                leafInsert(child,leaf->value[0]);
-                IndexChange(leaf,rightParent,leaf->value[0]);
-                treeDelete(parent,rightParent);
-            }
-
             if(leaf->leaf){
-                predecessor->successor=successor;
-                successor->predecessor=predecessor;
+                if(leftParent){
+                    leafInsert(child,leaf->value[0]);
+                    treeDelete(parent,leftParent); 
+                    if(leaf->leaf&&successor!=NULL) {
+                        predecessor->successor=successor;
+                        successor->predecessor=child;
+                    } else child->successor=NULL;
+
+                } else if(rightParent){
+                    leafInsert(child,leaf->value[0]);
+                    IndexChange(leaf,rightParent,leaf->value[0]);
+                    _treeDelete(parent,leaf->value[0]);
+                    if(leaf->leaf&&predecessor!=NULL) {
+                        predecessor->successor=child;
+                        child->predecessor=predecessor;
+                    } else child->predecessor=NULL;
+                }
                 free(leaf);
+                verification(parent);
+            } else{
+                if(leftParent){
+                    mergeTreeL(child,leaf,leftParent);
+                    treeDelete(parent,leftParent);
+
+                } else if(rightParent){
+                    mergeTreeL(leaf,child,rightParent);
+                    treeDelete(parent,rightParent);
+                }
             }
-            verification(parent);
         }
     }
 }
@@ -356,6 +408,10 @@ void delete(int value){
 
 int readNode(int value){
     Node* node = root;
+    if (node == NULL) {
+        printf("전부 삭제됨");
+        return -1;
+    }
     while(!node->leaf){
         int flag = 0;
         for(int i = 0; i < node->count; i++){
@@ -373,11 +429,6 @@ int readNode(int value){
     } return 0;
 }
 
-
-//printTree
-//delete(root,value)
-//insert(root,value)
-//rand()
 void* _insertThread(void* arg){
     
     int n = *((int*) arg);
@@ -388,14 +439,57 @@ void* _insertThread(void* arg){
     
     for(int value = start ; value <= end ; value++ ){
         pthread_mutex_lock(&lock);
+        printf("%d 쓰기 시도\n",value);
         insert(value);
+        printf("%d 쓰기 성공\n",value);
         pthread_mutex_unlock(&lock);
     }
-    
 
+    pthread_exit(NULL);
 }
 
+void* _readThread(){
+    while(1){
+        int value = rand()%300+1;
 
+        pthread_mutex_lock(&lock);
+        printf("%d 읽기 시도\n",value);
+        if(readNode(value)==1) {
+            printf("%d 읽기 성공\n",value);
+            pthread_mutex_unlock(&lock);
+        }
+        else if(readNode(value)==-1) {
+            break;
+        }
+        else {
+            printf("%d 읽기 실패\n",value);
+            pthread_mutex_unlock(&lock);
+            usleep(100000);
+        }
+    }
+    pthread_exit(NULL);
+}
+
+void* _deleteThread(){
+    while(1){
+        int value = rand()%300+1;
+        
+        pthread_mutex_lock(&lock);
+        printf("%d 삭제 시도\n",value);
+        if(readNode(value)) {
+            delete(value);
+            printf("%d 삭제 성공\n",value);
+            pthread_mutex_unlock(&lock);
+        } else if(readNode(value)==-1) {
+            break;
+        } else {
+            printf("%d 삭제 실패\n",value);
+            pthread_mutex_unlock(&lock);
+            usleep(100000);
+        }
+    }
+    pthread_exit(NULL);
+}
 
 int main() {
     
@@ -411,11 +505,25 @@ int main() {
         pthread_create(&insertThread[i], NULL, _insertThread, &args[i]);
     }
 
+    for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
+        pthread_create(&readThread[i], NULL, _readThread, NULL);
+    }
+
+    pthread_create(&deleteThread, NULL, _deleteThread, NULL);
+
+    
     for(int i = 0 ; i < sizeof(insertThread) / sizeof(insertThread[0]) ; i ++){
         pthread_join(insertThread[i], NULL);
     }
-    // int value[] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
-    // int num = sizeof(value) / sizeof(value[0]);
+
+    for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
+        pthread_join(readThread[i], NULL);
+    }
+
+    pthread_join(deleteThread, NULL);
+
+    int value[] = {16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,17,18,19,20,21,22,23,24};
+    int num = sizeof(value) / sizeof(value[0]);
 
     // for (int i = 0; i < num; i++ ) {
     //     printf("\n\n%d 가 입력됩니다.\n",value[i]);
@@ -424,6 +532,12 @@ int main() {
     //     printf("\n\n");
     // }
 
-    printTree();
+    // for (int i = 0; i < num; i++ ) {
+    //     printf("\n\n%d 가 삭제됩니다.\n",value[i]);
+    //     delete(value[i]);
+    //     printTree();
+    //     printf("\n\n");
+    // }
+
     return 0;
 }
