@@ -2,10 +2,24 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/time.h>
 #define M 5
 #define SEED 10
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+#define INSERT_THREAD_NUM 3
+#define DELETE_THREAD_NUM 5
+#define DELAY 100000
 
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t rcond = PTHREAD_COND_INITIALIZER;
+pthread_cond_t wcond = PTHREAD_COND_INITIALIZER;
+
+int reader = 0;
+int del = 0;
+
+typedef struct Timeval {
+    long sec;
+    long usec;
+} Timeval;
 
 typedef struct Node {
     int leaf;
@@ -91,6 +105,10 @@ Node* split(Node* node){
 
     int value = node->value[M/2];
     Node* sibling = newNode();
+    if(node->successor != NULL) node->successor->predecessor = sibling;
+    sibling->successor = node->successor;
+    sibling->predecessor = node;
+    node->successor = sibling;
     sibling->parent = node->parent;
     sibling->leaf = node->leaf;
 
@@ -104,11 +122,6 @@ Node* split(Node* node){
         node->count = M/2;
         sibling->count = (M+M%2)/2;
 
-        sibling->successor = node->successor;
-        node->successor = sibling;
-        if(sibling->successor!=NULL) sibling->successor->predecessor = sibling;
-        sibling->predecessor=node;
-
     //인덱스 노드 분할
     } else {
         node->value[M/2] = 0;
@@ -117,7 +130,7 @@ Node* split(Node* node){
             node->value[i] = 0;
         }
         node->count = M/2;
-        sibling->count = (M-M%2)/2;
+        sibling->count = M/2;
 
         for(int i = (M+1)/2 ; i < M+1 ; i++){
             sibling->child[i-(M+1)/2] = node->child[i];
@@ -192,7 +205,7 @@ void IndexChange(Node* node, int before, int after){
 }
 
 void leafDelete(Node* node, int value){
-    if (node->value[0] == value) IndexChange(node,value,node->value[1]);
+    if (node->leaf&&node->value[0] == value) IndexChange(node,value,node->value[1]);
 
     for(int i = 0; i < node->count ; i++){
         if(node->value[i]==value){
@@ -225,7 +238,12 @@ void treeDelete(Node* parent, int value){
             for(int j = i ; j < parent->count; j++){
                 parent->value[j] = parent->value[j+1];
                 parent->child[j+1] = parent->child[j+2];
-            } break;
+            } 
+            if (parent->child[i+1]!=NULL) {
+                parent->child[i+1]->predecessor=parent->child[i];
+                parent->child[i]->successor=parent->child[i+1];
+            }
+            break;
         } 
     }
     parent->count--;
@@ -237,9 +255,15 @@ void _treeDelete(Node* parent, int value){
             for(int j = i ; j < parent->count+1; j++){
                 parent->value[j] = parent->value[j+1];
                 parent->child[j] = parent->child[j+1];
-            } break;
+            } 
+            if(i>0){
+                parent->child[i]->predecessor=parent->child[i-1];
+                parent->child[i-1]->successor=parent->child[i];
+            }
+            break;
         } 
     }
+
     parent->count--;
 }
 
@@ -294,9 +318,14 @@ void mergeRoot(Node* parent){
         rightChild->child[i]->parent = parent;
         c_value++;
     }
-
-    free(leftChild);
-    free(rightChild);
+    if(parent->child[0]->leaf){
+        for(int i = 0 ; i < parent->count ; i ++){
+            if(parent->child[i] != NULL) parent->child[i]->successor=parent->child[i+1];
+        }
+        for(int i = 1 ; i < parent->count ; i ++){
+            if(parent->child[i] != NULL)  parent->child[i]->predecessor=parent->child[i-1];
+        }
+    }
 }
 
 void mergeTreeL(Node* left, Node* right, int parent){
@@ -316,16 +345,14 @@ void mergeTreeL(Node* left, Node* right, int parent){
 void recover(Node* leaf){
     int min = M/2+M%2-1;
 
-    Node* successor = leaf->successor;
-    Node* predecessor = leaf->predecessor;
     Node* parent = leaf->parent;
-    Node* child; 
+    Node* child;
 
     int leftParent = searchParentByRight(parent,leaf->value[0]);
     int rightParent = searchParentByLeft(parent,leaf->value[0]);
     if(leftParent) child = leftChild(parent,leftParent);
-    else child = rightChild(parent,rightParent);
-    
+    else if(rightParent) child = rightChild(parent,rightParent);
+
     //전임자에게 빌림
     if (leftParent&&child->count > min){
         if(leaf->leaf){
@@ -339,6 +366,8 @@ void recover(Node* leaf){
             leaf->child[1] = leaf->child[0];
             leaf->child[0] = child->child[child->count];
             child->child[child->count]->parent = leaf;
+            
+            leaf->child[0]->parent = leaf;
             treeDelete(child,child->value[child->count-1]);
         }
     
@@ -365,8 +394,11 @@ void recover(Node* leaf){
 
         } else{
             if(leaf->leaf){
+                Node* successor = leaf->successor;
+                Node* predecessor = leaf->predecessor;
                 if(leftParent){
-                    leafInsert(child,leaf->value[0]);
+
+                    leafInsert(predecessor,leaf->value[0]);
                     treeDelete(parent,leftParent); 
                     if(leaf->leaf&&successor!=NULL) {
                         predecessor->successor=successor;
@@ -374,7 +406,7 @@ void recover(Node* leaf){
                     } else child->successor=NULL;
 
                 } else if(rightParent){
-                    leafInsert(child,leaf->value[0]);
+                    leafInsert(successor,leaf->value[0]);
                     IndexChange(leaf,rightParent,leaf->value[0]);
                     _treeDelete(parent,leaf->value[0]);
                     if(leaf->leaf&&predecessor!=NULL) {
@@ -382,7 +414,6 @@ void recover(Node* leaf){
                         child->predecessor=predecessor;
                     } else child->predecessor=NULL;
                 }
-                free(leaf);
                 verification(parent);
             } else{
                 if(leftParent){
@@ -393,6 +424,7 @@ void recover(Node* leaf){
                     mergeTreeL(leaf,child,rightParent);
                     treeDelete(parent,rightParent);
                 }
+                verification(parent);
             }
         }
     }
@@ -429,74 +461,105 @@ int readNode(int value){
     } return 0;
 }
 
+
 void* _insertThread(void* arg){
     
     int n = *((int*) arg);
 
     int start = n*100+1;
     int end = (n+1)*100;
-
     
     for(int value = start ; value <= end ; value++ ){
+
         pthread_mutex_lock(&lock);
-        printf("%d 쓰기 시도\n",value);
+        while (reader > 0) pthread_cond_wait(&rcond, &lock);
+
         insert(value);
-        printf("%d 쓰기 성공\n",value);
+        printf("%d 쓰기 성공 \n\n",value);
+
+        pthread_cond_broadcast(&rcond);
+
         pthread_mutex_unlock(&lock);
     }
 
-    pthread_exit(NULL);
+    return NULL;
 }
 
 void* _readThread(){
     while(1){
+        pthread_mutex_lock(&lock);
+        reader++;
+
+        if (reader == 1) pthread_cond_wait(&rcond, &lock);
+        pthread_mutex_unlock(&lock);
+
         int value = rand()%300+1;
+        int fail = 0;
+        int flag = 0;
+
+        flag = readNode(value);
+        
+        if(flag == 1) {
+            printf("%d 읽기 성공! 현재 reader = %d\n\n", value, reader);
+        } else if(flag == 0){
+            printf("%d 읽기 실패! 현재 reader = %d\n\n", value, reader);
+            fail = 1;
+        }
 
         pthread_mutex_lock(&lock);
-        printf("%d 읽기 시도\n",value);
-        if(readNode(value)==1) {
-            printf("%d 읽기 성공\n",value);
-            pthread_mutex_unlock(&lock);
-        }
-        else if(readNode(value)==-1) {
-            break;
-        }
-        else {
-            printf("%d 읽기 실패\n",value);
-            pthread_mutex_unlock(&lock);
-            usleep(100000);
-        }
+        reader--;
+        if (reader == 0) pthread_cond_signal(&wcond); 
+        pthread_mutex_unlock(&lock);
+        if(del == 300) break;
+        if(fail) usleep(DELAY);
     }
-    pthread_exit(NULL);
+    return NULL;
 }
 
 void* _deleteThread(){
+    
+    int fail = 0;
+    
     while(1){
-        int value = rand()%300+1;
-        
         pthread_mutex_lock(&lock);
-        printf("%d 삭제 시도\n",value);
-        if(readNode(value)) {
+        while (reader > 0) pthread_cond_wait(&wcond, &lock);
+
+        int value = rand()%300+1;
+        int flag = readNode(value);
+
+        if(flag == 1) {
             delete(value);
-            printf("%d 삭제 성공\n",value);
-            pthread_mutex_unlock(&lock);
-        } else if(readNode(value)==-1) {
-            break;
-        } else {
-            printf("%d 삭제 실패\n",value);
-            pthread_mutex_unlock(&lock);
-            usleep(100000);
+
+            del++;
+            printf("%d 삭제 성공 %d/300\n\n",value,del);
+
+        } else if(flag == 0){
+            printf("%d 삭제 실패 %d/300\n\n",value,del);
+            fail = 1;
         }
+
+        pthread_cond_broadcast(&rcond);
+
+        pthread_mutex_unlock(&lock);
+
+        printf("현재 삭제된 갯수 : %d\n",del);
+        if(del == 300) break;
+        if(fail) usleep(DELAY);
     }
-    pthread_exit(NULL);
+    printf("삭제가 완료되었습니다.");
+    return NULL;
 }
 
 int main() {
-    
+    Timeval tv;
+    double start, end;
+    gettimeofday(&tv, NULL);
+	start = (tv.sec) * 1000 + (tv.usec) / 1000 ;
+
     srand(SEED);
 
-    pthread_t insertThread[3];
-    pthread_t readThread[5];
+    pthread_t insertThread[INSERT_THREAD_NUM];
+    pthread_t readThread[DELETE_THREAD_NUM];
     pthread_t deleteThread;
 
     int args[3];
@@ -511,7 +574,6 @@ int main() {
 
     pthread_create(&deleteThread, NULL, _deleteThread, NULL);
 
-    
     for(int i = 0 ; i < sizeof(insertThread) / sizeof(insertThread[0]) ; i ++){
         pthread_join(insertThread[i], NULL);
     }
@@ -522,22 +584,10 @@ int main() {
 
     pthread_join(deleteThread, NULL);
 
-    int value[] = {16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,17,18,19,20,21,22,23,24};
-    int num = sizeof(value) / sizeof(value[0]);
 
-    // for (int i = 0; i < num; i++ ) {
-    //     printf("\n\n%d 가 입력됩니다.\n",value[i]);
-    //     insert(value[i]);
-    //     printTree();
-    //     printf("\n\n");
-    // }
-
-    // for (int i = 0; i < num; i++ ) {
-    //     printf("\n\n%d 가 삭제됩니다.\n",value[i]);
-    //     delete(value[i]);
-    //     printTree();
-    //     printf("\n\n");
-    // }
+    gettimeofday(&tv, NULL);
+	end = (tv.sec) * 1000 + (tv.usec) / 1000 ;
+	printf("프로그램 실행 시간 : %.4lf초\n", (end - start) / 1000);
 
     return 0;
 }
