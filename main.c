@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #define M 5
-#define SEED 10
+#define SEED 100
 #define INSERT_THREAD_NUM 3
 #define DELETE_THREAD_NUM 5
 #define DELAY 100000
@@ -461,7 +461,7 @@ int readNode(int value){
     } return 0;
 }
 
-
+int wrt = 0;
 void* _insertThread(void* arg){
     
     int n = *((int*) arg);
@@ -472,13 +472,15 @@ void* _insertThread(void* arg){
     for(int value = start ; value <= end ; value++ ){
 
         pthread_mutex_lock(&lock);
-        while (reader > 0) pthread_cond_wait(&rcond, &lock);
-
+        while (reader > 0) pthread_cond_wait(&wcond, &lock);
+        
+        wrt++;
         insert(value);
-        printf("%d 쓰기 성공 \n\n",value);
+        printf("%d 쓰기 성공! %d\n",value,wrt);
+        printTree();
+        printf("\n\n");
 
-        pthread_cond_broadcast(&rcond);
-
+        pthread_cond_signal(&rcond);
         pthread_mutex_unlock(&lock);
     }
 
@@ -487,10 +489,10 @@ void* _insertThread(void* arg){
 
 void* _readThread(){
     while(1){
+
         pthread_mutex_lock(&lock);
         reader++;
-
-        if (reader == 1) pthread_cond_wait(&rcond, &lock);
+        if (reader == 1) pthread_cond_wait(&wcond, &lock);
         pthread_mutex_unlock(&lock);
 
         int value = rand()%300+1;
@@ -500,9 +502,9 @@ void* _readThread(){
         flag = readNode(value);
         
         if(flag == 1) {
-            printf("%d 읽기 성공! 현재 reader = %d\n\n", value, reader);
+            printf("%d 읽기 성공! 현재 reader = %d, 삭제된 갯수 : %d\n\n", value, reader,del);
         } else if(flag == 0){
-            printf("%d 읽기 실패! 현재 reader = %d\n\n", value, reader);
+            printf("%d 읽기 실패! 현재 reader = %d, 삭제된 갯수 : %d\n\n", value, reader,del);
             fail = 1;
         }
 
@@ -510,16 +512,16 @@ void* _readThread(){
         reader--;
         if (reader == 0) pthread_cond_signal(&wcond); 
         pthread_mutex_unlock(&lock);
+
         if(del == 300) break;
         if(fail) usleep(DELAY);
     }
     return NULL;
 }
 
+
 void* _deleteThread(){
-    
     int fail = 0;
-    
     while(1){
         pthread_mutex_lock(&lock);
         while (reader > 0) pthread_cond_wait(&wcond, &lock);
@@ -531,18 +533,20 @@ void* _deleteThread(){
             delete(value);
 
             del++;
-            printf("%d 삭제 성공 %d/300\n\n",value,del);
+            //printf("%d 삭제 성공 %d/300\n\n", value, del);
+            printf("%d 삭제 성공 %d/300\n", value, del);
+            printTree();
+            printf("\n");
 
         } else if(flag == 0){
-            printf("%d 삭제 실패 %d/300\n\n",value,del);
+            printf("%d 삭제 실패 %d/300\n", value, del);
             fail = 1;
         }
 
-        pthread_cond_broadcast(&rcond);
-
+        pthread_cond_signal(&rcond);
         pthread_mutex_unlock(&lock);
 
-        printf("현재 삭제된 갯수 : %d\n",del);
+        printf("현재 삭제된 갯수 : %d\n\n",del);
         if(del == 300) break;
         if(fail) usleep(DELAY);
     }
@@ -562,15 +566,16 @@ int main() {
     pthread_t readThread[DELETE_THREAD_NUM];
     pthread_t deleteThread;
 
+
     int args[3];
     for(int i = 0 ; i < sizeof(insertThread) / sizeof(insertThread[0]) ; i ++){
         args[i] = i;
         pthread_create(&insertThread[i], NULL, _insertThread, &args[i]);
     }
 
-    for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
-        pthread_create(&readThread[i], NULL, _readThread, NULL);
-    }
+    // for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
+    //     pthread_create(&readThread[i], NULL, _readThread, NULL);
+    // }
 
     pthread_create(&deleteThread, NULL, _deleteThread, NULL);
 
@@ -578,11 +583,12 @@ int main() {
         pthread_join(insertThread[i], NULL);
     }
 
-    for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
-        pthread_join(readThread[i], NULL);
-    }
+    // for(int i = 0 ; i < sizeof(readThread) / sizeof(readThread[0]) ; i ++){
+    //     pthread_join(readThread[i], NULL);
+    // }
 
     pthread_join(deleteThread, NULL);
+
 
 
     gettimeofday(&tv, NULL);
